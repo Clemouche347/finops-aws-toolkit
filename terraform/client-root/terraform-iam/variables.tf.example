@@ -1,0 +1,35 @@
+variable "aws_profile" {
+  description = "AWS CLI profile to use."
+  type        = string
+  default     = "default"
+}
+
+variable "resource_prefix" {
+  description = "Plain string prefix, no separator. Can leave empty for production."
+  type        = string
+  default     = ""
+}
+
+variable "default_tags" {
+  description = "Tags applied to all resources via provider default_tags and passed to every module."
+  type        = map(string)
+  default     = {}
+}
+
+variable "iam_auditor_profile" {
+  description = "iam-auditor profile: 'audit' (read + Athena) or 'admin' (audit + FinOps infra provisioning)."
+  type        = string
+  default     = "admin"
+}
+
+variable "iam_auditor_enable_iam_policy" {
+  description = "Attach the Finops-IAM policy to the finops-auditor user. Enable only when explicitly needed."
+  type        = bool
+  default     = false
+}
+
+variable "iam_auditor_enable_tagging_policy" {
+  description = "Attach the Finops-tagging-all-resources policy to the finops-auditor user."
+  type        = bool
+  default     = false
+}

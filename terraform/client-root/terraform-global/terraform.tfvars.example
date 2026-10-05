@@ -1,0 +1,12 @@
+aws_profile = "default"
+
+resource_prefix = ""    # optional
+
+default_tags = {
+  env     = "prod"
+  project = "finops"
+ }
+
+cur_projection_start_date = "2025-12"   # first CUR export month, format yyyy-MM
+
+use_global_namespace = false    # false recommended

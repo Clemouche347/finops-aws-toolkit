@@ -1,0 +1,19 @@
+aws_profile = "default"
+
+resource_prefix = ""    # optional
+
+default_tags = {
+  env     = "prod"
+  project = "finops"
+ }
+
+infra_region = "eu-west-3"     # IMPORTANT: change infra region in backend.tf to avoid state override of the other existing regions
+
+use_global_namespace = false    # false recommended
+
+enable_s3_analysis = false   # Set to true once S3 Inventory and server access logging configs are in place.
+
+# if enable_s3_analysis = true.
+s3_source_bucket_names = ["bucket-a", "bucket-b"]
+access_logs_year_start = 2026
+inventory_projection_start = "2026-06-17-01-00"

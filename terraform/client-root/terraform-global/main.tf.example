@@ -1,0 +1,37 @@
+locals {
+  common_tags = merge({ managed_by = "terraform" }, var.default_tags)
+}
+
+provider "aws" {
+  region  = "us-east-1"
+  profile = var.aws_profile
+  default_tags { tags = local.common_tags }
+}
+
+module "audit_buckets_cur" {
+  source = "../../../../finops-aws-toolkit/terraform/modules/audit-buckets"
+
+  create_cur_group     = true
+  use_global_namespace = var.use_global_namespace
+  resource_prefix      = var.resource_prefix
+  tags                 = local.common_tags
+}
+
+module "athena_workgroups_cur" {
+  source = "../../../../finops-aws-toolkit/terraform/modules/athena-workgroups"
+
+  create_cur_workgroup           = true
+  athena_results_cur_bucket_name = module.audit_buckets_cur.athena_results_cur_bucket_name
+  resource_prefix                = var.resource_prefix
+  tags                           = local.common_tags
+}
+
+module "glue_cur_table" {
+  source = "../../../../finops-aws-toolkit/terraform/modules/glue-cur-table"
+
+  cur_exports_bucket    = module.audit_buckets_cur.cur_exports_bucket_name
+  columns               = var.cur_columns
+  projection_start_date = var.cur_projection_start_date
+  resource_prefix       = var.resource_prefix
+  tags                  = local.common_tags
+}

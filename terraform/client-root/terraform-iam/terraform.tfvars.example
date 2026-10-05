@@ -1,0 +1,15 @@
+
+aws_profile = "default"
+
+resource_prefix = ""    # optional
+
+default_tags = {
+  env     = "prod"
+  project = "finops"
+ }
+
+iam_auditor_profile = "admin"    # Profile: "audit" (read + Athena) or "admin" (audit + FinOps infra provisioning).
+
+iam_auditor_enable_iam_policy = false    # false by default, attach Finops-IAM — allows management of customer managed policies.
+
+iam_auditor_enable_tagging_policy = false

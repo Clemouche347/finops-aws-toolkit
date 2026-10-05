@@ -1,0 +1,63 @@
+variable "aws_profile" {
+  description = "AWS CLI profile to use."
+  type        = string
+  default     = "default"
+}
+
+variable "resource_prefix" {
+  description = "Plain string prefix, no separator. Can leave empty for production."
+  type        = string
+  default     = ""
+}
+
+variable "default_tags" {
+  description = "Tags applied to all resources via provider default_tags and passed to every module."
+  type        = map(string)
+  default     = {}
+}
+
+variable "infra_region" {
+  description = "AWS region where client infra runs (compute, S3, CloudWatch). eu-west-3 for Paris."
+  type        = string
+}
+
+variable "use_global_namespace" {
+  description = "Switch S3 buckets to global namespace instead of account-regional (-an)."
+  type        = bool
+  default     = false
+}
+
+variable "enable_s3_analysis" {
+  description = <<-EOT
+    Enable the S3 analysis block:
+      - s3-inventory and s3-logging buckets (in module audit_buckets_infra)
+      - finops-s3 workgroup (in module athena_workgroups_s3)
+      - finops_s3 Glue tables (module glue_s3_tables)
+    Set to true once S3 Inventory and server access logging configs are in place.
+  EOT
+  type    = bool
+  default = false
+}
+
+variable "s3_source_bucket_names" {
+  description = "List of source S3 bucket names to analyse (access logs + inventory). Required if enable_s3_analysis = true."
+  type        = list(string)
+  default     = []
+}
+
+variable "access_logs_year_start" {
+  description = "First year for access_logs table partition projection. Required if enable_s3_analysis = true."
+  type        = number
+  default     = 2026
+}
+
+variable "inventory_projection_start" {
+  description = <<-EOT
+    Date of the first S3 Inventory snapshot, format yyyy-MM-dd-HH-mm
+    Required if enable_s3_analysis = true. Read from the hive/ folder name or the
+    creationTimestamp field in the first snapshot's manifest.json.
+    Default is a placeholder — replace before enabling enable_s3_analysis.
+  EOT
+  type    = string
+  default = "2026-01-01-00-00"
+}

@@ -1,0 +1,36 @@
+variable "aws_profile" {
+  description = "AWS CLI profile to use."
+  type        = string
+  default     = "default"
+}
+
+variable "resource_prefix" {
+  description = "Plain string prefix, no separator. Can leave empty for production."
+  type        = string
+  default     = ""
+}
+
+variable "default_tags" {
+  description = "Tags applied to all resources via provider default_tags and passed to every module."
+  type        = map(string)
+  default     = {}
+}
+
+variable "use_global_namespace" {
+  description = "Switch S3 buckets to global namespace instead of account-regional (-an)."
+  type        = bool
+  default     = false
+}
+
+variable "cur_projection_start_date" {
+  description = "First CUR data month, format yyyy-MM (e.g. 2025-12). Lower bound for partition projection."
+  type        = string
+}
+
+variable "cur_columns" {
+  type = list(object({
+    name = string
+    type = string
+  }))
+  default = []
+}

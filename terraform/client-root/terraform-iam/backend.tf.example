@@ -1,0 +1,12 @@
+# For remote state only S3, uncomment and adapt the block below,
+
+# terraform {
+#   backend "s3" {
+#     bucket       = "tfstate-<account_id>-<region>"          # dedicated bucket, create beforehand
+#     key          = "finops/<client>/iam/terraform.tfstate"  
+#     region       = "eu-west-3"                              # region of the tfstate bucket
+#     profile      = "<your-admin-profile>"                   # profile with access to your own tfstate bucket
+#     encrypt      = true
+#     use_lockfile = true                                      # S3 native locking (Terraform >= 1.11, replaces deprecated DynamoDB)
+#   }
+# }

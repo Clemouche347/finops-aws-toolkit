@@ -1,0 +1,549 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  FinOps Audit - Creation du user IAM finops-auditor (Option B finops-admin).
+  Prérequis OBLIGATOIRE avant de déployer : activer "IAM user and role access to Billing
+  Information" dans AWS Console - Account (en haut à droite) - IAM user and role access
+  to Billing Information - Edit - Activate IAM Access. Sans ça, l'auditeur ne voit
+  aucun élément de Billing & Cost Management.
+  Les access keys (CLI) sont à créer manuellement après déploiement (voir Outputs).
+
+Parameters:
+
+
+  ResourcePrefix:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[a-z0-9]*$'
+    ConstraintDescription: "Prefixe optionnel : minuscules et chiffres uniquement, sans separateur. Laisser vide pour aucun prefixe."
+    Description: "Prefixe de ressource optionnel applique aux noms de policies, au user et aux ARN Athena/Glue. Vide = noms par defaut."
+
+  AttachCloudwatchAgent:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: "Attacher Finops-cloudwatch-agent au user ? Default non."
+
+  AuditUserPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 12
+    AllowedPattern: '^(?=.*[a-z])(?=.*[A-Z])(?=.*[0-9])(?=.*[!@#$%^&*()_+=\[\]{}:;,.?-]).{12,}$'
+    ConstraintDescription: >-
+      Le mot de passe doit contenir au moins 12 caracteres, une majuscule,
+      une minuscule, un chiffre et un symbole (!@#$%^&*()_+=[]{}:;,.?-)
+    Description: "Mot de passe console pour finops-auditor (min 12 car., majuscule + minuscule + chiffre + symbole)"
+
+
+Conditions:
+  IncludeCloudwatchAgent: !Equals [!Ref AttachCloudwatchAgent, 'true']
+  HasPrefix: !Not [!Equals [!Ref ResourcePrefix, '']]
+
+Resources:
+
+  # ────────────────────────────────────────────────
+  # Policy C — Finops-optin
+  # Activation des services FinOps (CUR 2.0, Resource Explorer,
+  # Compute Optimizer, Cost Optimization Hub)
+  # ────────────────────────────────────────────────
+  FinopsOptinPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-optin", "Finops-optin"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CreateServiceLinkedRolesForFinOpsServices
+            Effect: Allow
+            Action: iam:CreateServiceLinkedRole
+            Resource: '*'
+            Condition:
+              StringEquals:
+                iam:AWSServiceName:
+                  - resource-explorer-2.amazonaws.com
+                  - compute-optimizer.amazonaws.com
+                  - cost-optimization-hub.bcm.amazonaws.com
+          - Sid: DataExportsCreate
+            Effect: Allow
+            Action:
+              - bcm-data-exports:CreateExport
+              - bcm-data-exports:ListExports
+              - bcm-data-exports:GetExport
+              - bcm-data-exports:TagResource
+              - bcm-data-exports:UntagResource
+              - bcm-data-exports:ListTagsForResource
+            Resource: '*'
+          - Sid: CurLegacyRequiredByCur2Wizard
+            Effect: Allow
+            Action: cur:PutReportDefinition
+            Resource: '*'
+          - Sid: ResourceExplorerOptIn
+            Effect: Allow
+            Action: resource-explorer-2:*
+            Resource: '*'
+          - Sid: ComputeOptimizerOptIn
+            Effect: Allow
+            Action:
+              - compute-optimizer:UpdateEnrollmentStatus
+              - compute-optimizer:GetEnrollmentStatus
+            Resource: '*'
+          - Sid: CostOptimizationHubOptIn
+            Effect: Allow
+            Action:
+              - cost-optimization-hub:UpdateEnrollmentStatus
+              - cost-optimization-hub:ListEnrollmentStatuses
+              - cost-optimization-hub:UpdatePreferences
+              - cost-optimization-hub:GetPreferences
+            Resource: '*'
+
+  # ────────────────────────────────────────────────
+  # Policy D — Finops-setup
+  # Création de l'infra d'audit : buckets S3, workgroup Athena,
+  # catalogage Glue, activation cost allocation tags
+  # ────────────────────────────────────────────────
+  FinopsSetupPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-setup", "Finops-setup"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          # Wildcards par préfixe : compatibles avec les deux namespaces S3
+          # (global "cur-exports-[id]" ET account regional "cur-exports-[id]-[region]-an")
+          - Sid: ConfigureFinopsBucket
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetBucketAcl
+              - s3:PutBucketAcl
+              - s3:PutEncryptionConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:DeleteBucketPolicy
+              - s3:DeleteBucket
+            Resource:
+              - arn:aws:s3:::*cur-exports*
+              - arn:aws:s3:::*athena-results*
+              - arn:aws:s3:::*compute-optimizer-results*
+              - arn:aws:s3:::*s3-inventory*
+              - arn:aws:s3:::*s3-logging*
+              - arn:aws:s3:::*finops*
+          - Sid: CreateAthenaWorkgroup
+            Effect: Allow
+            Action:
+              - athena:CreateWorkGroup
+              - athena:UpdateWorkGroup
+              - athena:TagResource
+              - athena:GetWorkGroup
+              - athena:DeleteWorkGroup
+            Resource: !Sub "arn:aws:athena:*:${AWS::AccountId}:workgroup/*finops*"
+          - Sid: GlueCatalogingWrite
+            Effect: Allow
+            Action:
+              - glue:CreateDatabase
+              - glue:CreateTable
+              - glue:UpdateTable
+              - glue:DeleteTable
+              - glue:BatchCreatePartition
+              - glue:DeleteDatabase
+            Resource:
+              - !Sub "arn:aws:glue:*:${AWS::AccountId}:catalog"
+              - !Sub "arn:aws:glue:*:${AWS::AccountId}:database/*finops*"
+              - !Sub "arn:aws:glue:*:${AWS::AccountId}:table/*finops*/*"
+              - !Sub "arn:aws:glue:*:${AWS::AccountId}:userDefinedFunction/*finops*/*"
+          - Sid: CostExplorerConfig
+            Effect: Allow
+            Action:
+              - ce:ListCostAllocationTags
+              - ce:UpdateCostAllocationTagsStatus
+              - ce:UpdatePreferences
+              - ce:GetPreferences
+              - ce:CreateReport
+            Resource: '*'
+          - Sid: S3AccessLogging
+            Effect: Allow
+            Action:
+              - s3:PutInventoryConfiguration
+              - s3:PutBucketLogging
+              - s3:GetBucketLogging
+            Resource: arn:aws:s3:::*
+
+  # ────────────────────────────────────────────────
+  # Policy E — Finops-cloudwatch-agent (version resserrée)
+  # Déploiement CloudWatch agent via SSM sur les EC2
+  # ────────────────────────────────────────────────
+  FinopsCloudwatchAgentPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-cloudwatch-agent", "Finops-cloudwatch-agent"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: SSMCloudWatchAgentDeploy
+            Effect: Allow
+            Action:
+              - ssm:DescribeInstanceInformation
+              - iam:ListAttachedRolePolicies
+              - iam:GetInstanceProfile
+            Resource: '*'
+          - Sid: SSMSendCommandCWAgentOnly
+            Effect: Allow
+            Action: ssm:SendCommand
+            Resource:
+              - arn:aws:ssm:*:*:document/AWS-ConfigureAWSPackage
+              - arn:aws:ssm:*:*:document/AmazonCloudWatch-ManageAgent
+              - !Sub "arn:aws:ec2:*:${AWS::AccountId}:instance/*"
+          - Sid: SSMParameterStore
+            Effect: Allow
+            Action:
+              - ssm:PutParameter
+              - ssm:GetParameter
+              - ssm:AddTagsToResource
+              - ssm:DeleteParameter
+            Resource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/AmazonCloudWatchAgent*"
+          - Sid: CreateCWAgentRole
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:CreateInstanceProfile
+              - iam:AddRoleToInstanceProfile
+              - iam:PassRole
+              - iam:TagRole
+              - iam:RemoveRoleFromInstanceProfile
+              - iam:DeleteRole
+              - iam:DeleteInstanceProfile
+            Resource:
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/*CloudWatchAgent*"
+              - !Sub "arn:aws:iam::${AWS::AccountId}:instance-profile/*CloudWatchAgent*"
+          - Sid: AttachCWAgentPoliciesOnly
+            Effect: Allow
+            Action:
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+            Condition:
+              ArnEquals:
+                iam:PolicyARN:
+                  - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+                  - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+          - Sid: EC2InstanceProfile
+            Effect: Allow
+            Action:
+              - ec2:AssociateIamInstanceProfile
+              - ec2:DescribeIamInstanceProfileAssociations
+            Resource: '*'
+
+  # ────────────────────────────────────────────────
+  # Policy F — Finops-deny-data-access (Deny)
+  # Bloque l'accès aux données applicatives sensibles.
+  # Whitelist uniquement les 3 buckets finops et les paramètres CW agent.
+  # ────────────────────────────────────────────────
+  FinopsDenyDataAccessPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-deny-data-access", "Finops-deny-data-access"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyS3GetObjectExceptFinopsBuckets
+            Effect: Deny
+            Action: s3:GetObject
+            NotResource:
+              - arn:aws:s3:::*cur-exports*/*
+              - arn:aws:s3:::*athena-results*/*
+              - arn:aws:s3:::*compute-optimizer-results*/*
+              - arn:aws:s3:::*s3-inventory*/*
+              - arn:aws:s3:::*s3-logging*/*
+              - arn:aws:s3:::*finops*/* 
+          - Sid: DenySensitiveDataAccess
+            Effect: Deny
+            Action:
+              - rds-db:connect
+              - secretsmanager:GetSecretValue
+              - dynamodb:GetItem
+              - dynamodb:BatchGetItem
+              - lambda:GetFunction
+              - logs:GetLogEvents
+              - logs:FilterLogEvents
+            Resource: '*'
+          - Sid: DenySSMGetParameterExceptCloudWatchAgent
+            Effect: Deny
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:GetParametersByPath
+            NotResource: !Sub "arn:aws:ssm:*:${AWS::AccountId}:parameter/AmazonCloudWatchAgent*"
+
+  # ────────────────────────────────────────────────
+  # Policy G — Finops-allow-audit (Allow)
+  # Droits d'exécution audit : Athena, S3 résultats, Resource Explorer,
+  # bcm-data-exports, Cost Optimization Hub, CE engagement, Compute Optimizer export
+  # ────────────────────────────────────────────────
+  FinopsAllowAuditPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-allow-audit", "Finops-allow-audit"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AthenaRunQueriesInWorkgroup
+            Effect: Allow
+            Action:
+              - athena:StartQueryExecution
+              - athena:StopQueryExecution
+              - athena:CreateNamedQuery
+            Resource: !If
+              - HasPrefix
+              - - !Sub "arn:aws:athena:us-east-1:${AWS::AccountId}:workgroup/${ResourcePrefix}_finops-cur"
+                - !Sub "arn:aws:athena:*:${AWS::AccountId}:workgroup/${ResourcePrefix}_finops-s3"
+              - - !Sub "arn:aws:athena:us-east-1:${AWS::AccountId}:workgroup/finops-cur"
+                - !Sub "arn:aws:athena:*:${AWS::AccountId}:workgroup/finops-s3"
+          - Sid: S3AthenaComputeOptimizerResultsWrite
+            Effect: Allow
+            Action:
+              - s3:PutObject
+              - s3:ListMultipartUploadParts
+              - s3:AbortMultipartUpload
+            Resource:
+              - arn:aws:s3:::*athena-results*/*
+              - arn:aws:s3:::*compute-optimizer-results*/*
+          - Sid: ResourceExplorerRead
+            Effect: Allow
+            Action:
+              - resource-explorer-2:Search
+              - resource-explorer-2:GetView
+              - resource-explorer-2:ListViews
+              - resource-explorer-2:ListIndexes
+              - resource-explorer-2:GetIndex
+              - resource-explorer-2:ListSupportedResourceTypes
+              - resource-explorer-2:BatchGetView
+            Resource: '*'
+          - Sid: BillingRecentNamespacesRead
+            Effect: Allow
+            Action:
+              - bcm-data-exports:List*
+              - bcm-data-exports:Get*
+              - bcm-recommended-actions:List*
+              - cost-optimization-hub:List*
+              - cost-optimization-hub:Get*
+            Resource: '*'
+          - Sid: CostExplorerPurchaseAnalyzer
+            Effect: Allow
+            Action:
+              - ce:StartCommitmentPurchaseAnalysis
+              - ce:GetCommitmentPurchaseAnalysis
+              - ce:ListCommitmentPurchaseAnalyses
+              - ce:GetSavingsPlansPurchaseRecommendation
+              - ce:GetReservationPurchaseRecommendation
+              - ce:GetRightsizingRecommendation
+              - ce:StartSavingsPlansPurchaseRecommendationGeneration
+            Resource: '*'
+          - Sid: ComputeOptimizerExport
+            Effect: Allow
+            Action:
+              - compute-optimizer:ExportEC2InstanceRecommendations
+              - compute-optimizer:ExportEBSVolumeRecommendations
+              - compute-optimizer:ExportLambdaFunctionRecommendations
+              - compute-optimizer:ExportECSServiceRecommendations
+              - compute-optimizer:ExportRDSDatabaseRecommendations
+              - compute-optimizer:ExportIdleRecommendations
+              - compute-optimizer:ExportAutoScalingGroupRecommendations
+              - compute-optimizer:ExportLicenseRecommendations
+              - compute-optimizer:DescribeRecommendationExportJobs
+            Resource: '*'
+          - Sid: FinopsCloudTrailInvestigation
+            Effect: Allow
+            Action:
+              - cloudtrail:CreateTrail
+              - cloudtrail:DeleteTrail
+              - cloudtrail:StartLogging
+              - cloudtrail:StopLogging
+              - cloudtrail:GetEventSelectors
+              - cloudtrail:PutEventSelectors
+              - cloudtrail:GetTrailStatus
+              - cloudtrail:DescribeTrails
+            Resource: !Sub "arn:aws:cloudtrail:*:${AWS::AccountId}:trail/*finops*"
+
+  # ────────────────────────────────────────────────
+  # Policy A — Finops-IAM (optionnelle ⚠️)
+  # Permet à l'auditeur de créer/modifier ses propres policies.
+  # A révoquer après la phase de setup si souhaité.
+  # ────────────────────────────────────────────────
+  # ────────────────────────────────────────────────
+  # Policy B — Finops-tagging-all-resources (optionnelle)
+  # Permet de tagger/dé-tagger les ressources pendant la mission
+  # ────────────────────────────────────────────────
+  FinopsTaggingPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !If [HasPrefix, !Sub "${ResourcePrefix}-Finops-tagging-all-resources", "Finops-tagging-all-resources"]
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: TaggingAPIAllResources
+            Effect: Allow
+            Action:
+              - tag:TagResources
+              - tag:UntagResources
+            Resource: '*'
+          - Sid: ServiceSpecificTagging
+            Effect: Allow
+            Action:
+              - ec2:CreateTags
+              - ec2:DeleteTags
+              - ecs:TagResource
+              - ecs:UntagResource
+              - eks:TagResource
+              - eks:UntagResource
+              - ecr:TagResource
+              - ecr:UntagResource
+              - lambda:TagResource
+              - lambda:UntagResource
+              - rds:AddTagsToResource
+              - rds:RemoveTagsFromResource
+              - s3:PutBucketTagging
+              - s3:PutObjectTagging
+              - s3:DeleteObjectTagging
+              - s3:PutObjectVersionTagging
+              - s3:DeleteObjectVersionTagging
+              - elasticache:AddTagsToResource
+              - elasticache:RemoveTagsFromResource
+              - elasticloadbalancing:AddTags
+              - elasticloadbalancing:RemoveTags
+              - autoscaling:CreateOrUpdateTags
+              - autoscaling:DeleteTags
+              - mq:CreateTags
+              - mq:DeleteTags
+              - logs:TagLogGroup
+              - logs:UntagLogGroup
+              - logs:TagResource
+              - logs:UntagResource
+              - cloudwatch:TagResource
+              - cloudwatch:UntagResource
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - sns:TagResource
+              - sns:UntagResource
+              - sqs:TagQueue
+              - sqs:UntagQueue
+              - kinesis:AddTagsToStream
+              - kinesis:RemoveTagsFromStream
+              - firehose:TagDeliveryStream
+              - firehose:UntagDeliveryStream
+              - kms:TagResource
+              - kms:UntagResource
+              - secretsmanager:TagResource
+              - secretsmanager:UntagResource
+              - ssm:AddTagsToResource
+              - ssm:RemoveTagsFromResource
+              - glue:TagResource
+              - glue:UntagResource
+              - athena:TagResource
+              - athena:UntagResource
+              - cloudfront:TagResource
+              - cloudfront:UntagResource
+              - route53:ChangeTagsForResource
+              - route53resolver:TagResource
+              - route53resolver:UntagResource
+              - bedrock:TagResource
+              - bedrock:UntagResource
+              - sagemaker:AddTags
+              - sagemaker:DeleteTags
+              - cognito-idp:TagResource
+              - cognito-idp:UntagResource
+              - cognito-identity:TagResource
+              - cognito-identity:UntagResource
+              - events:TagResource
+              - events:UntagResource
+              - states:TagResource
+              - states:UntagResource
+              - apigateway:TagResource
+              - apigateway:UntagResource
+              - appsync:TagResource
+              - appsync:UntagResource
+              - es:AddTags
+              - es:RemoveTags
+              - kafka:TagResource
+              - kafka:UntagResource
+              - backup:TagResource
+              - backup:UntagResource
+              - wafv2:TagResource
+              - wafv2:UntagResource
+              - network-firewall:TagResource
+              - network-firewall:UntagResource
+              - codecommit:TagResource
+              - codecommit:UntagResource
+              - codepipeline:TagResource
+              - codepipeline:UntagResource
+              - codedeploy:TagResource
+              - codedeploy:UntagResource
+              - cloudtrail:AddTags
+              - cloudtrail:RemoveTags
+              - config:TagResource
+              - config:UntagResource
+              - iam:TagUser
+              - iam:UntagUser
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:TagPolicy
+              - iam:UntagPolicy
+            Resource: '*'
+
+  # ────────────────────────────────────────────────
+  # User finops-auditor — Option B (finops-admin)
+  # Toutes les policies attachées. Les access keys CLI
+  # sont à créer manuellement après déploiement (voir Outputs).
+  # ────────────────────────────────────────────────
+  FinopsUser:
+    Type: AWS::IAM::User
+    DependsOn:
+      - FinopsDenyDataAccessPolicy
+      - FinopsAllowAuditPolicy
+      - FinopsOptinPolicy
+      - FinopsSetupPolicy
+      - FinopsCloudwatchAgentPolicy
+      - FinopsTaggingPolicy
+    Properties:
+      UserName: !If [HasPrefix, !Sub "${ResourcePrefix}-finops-auditor", "finops-auditor"]
+      LoginProfile:
+        Password: !Ref AuditUserPassword
+        PasswordResetRequired: false
+      ManagedPolicyArns:
+        # Audit core (toujours présentes)
+        - !Ref FinopsDenyDataAccessPolicy
+        - !Ref FinopsAllowAuditPolicy
+        # AWS managed
+        - arn:aws:iam::aws:policy/ReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSBillingReadOnlyAccess
+        - arn:aws:iam::aws:policy/AWSSupportAccess
+        # Setup et activation (Option B)
+        - !Ref FinopsOptinPolicy
+        - !Ref FinopsSetupPolicy
+        - !If [IncludeCloudwatchAgent, !Ref FinopsCloudwatchAgentPolicy, !Ref AWS::NoValue]
+        # Optionnelles — activables via parametres au deploiement
+        - !Ref FinopsTaggingPolicy
+
+Outputs:
+
+  FinopsUserArn:
+    Description: "ARN du user IAM créé"
+    Value: !GetAtt FinopsUser.Arn
+
+  ConsoleLoginUrl:
+    Description: "URL de connexion console à transmettre à l'auditeur"
+    Value: !Sub "https://${AWS::AccountId}.signin.aws.amazon.com/console"
+
+  NextStep1:
+    Description: "Étape suivante — Access Keys CLI"
+    Value: !Sub
+      - "IAM → Users → ${UserName} → Security credentials → Create access key → Use case : Other → Description : FinOps audit 2026"
+      - UserName: !If [HasPrefix, !Sub "${ResourcePrefix}-finops-auditor", "finops-auditor"]
+
+  NextStep2:
+    Description: "Transmission des credentials"
+    Value: "Utiliser onetimesecret.com pour transmettre mot de passe + access keys. Ne jamais envoyer en clair par email."
+
+  NextStep3:
+    Description: "Prérequis billing (si pas encore fait)"
+    Value: "Console → Account (en haut à droite) → IAM user and role access to Billing Information → Activate IAM Access"
